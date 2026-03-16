@@ -171,18 +171,14 @@ def _aggregate_to_driver_level(
 
     # Merge race results if provided
     if race_results is not None and not race_results.empty:
-        # Drop session_label from race_results before merging to avoid
-        # column conflicts — match on driver only within each session
-        # since driver_df already has session_label
-        race_results_clean = race_results.drop(
-            columns=["session_label"], errors="ignore"
+        # Merge on both driver and session_label so each driver's race
+        # result only matches their own weekend, not other races
+        driver_df = driver_df.merge(
+            race_results[["session_label", "driver",
+                          "race_position", "race_podium", "dnf"]],
+            on=["session_label", "driver"],
+            how="left"
         )
-        # Merge per session to avoid cross-race contamination
-        merged_parts = []
-        for label, group_df in driver_df.groupby("session_label"):
-            merged = group_df.merge(race_results_clean, on="driver", how="left")
-            merged_parts.append(merged)
-        driver_df = pd.concat(merged_parts, ignore_index=True)
         driver_df["podium"] = driver_df["race_podium"].fillna(0).astype(int)
         print(f"   ✅ Race results merged. "
               f"{driver_df['race_position'].notna().sum()} drivers matched.")
