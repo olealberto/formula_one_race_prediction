@@ -27,8 +27,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-YEAR        = 2024
-GRAND_PRIX  = "Monza"       # e.g. "Monza", "Silverstone", "Monaco"
+YEAR        = 2026
+GRAND_PRIX  = "China"       # e.g. "Monza", "Silverstone", "Monaco"
 SESSION     = "R"           # R = Race, Q = Qualifying, FP1/FP2/FP3 = Practice
 CACHE_DIR   = "./f1_cache"  # Local cache to speed up repeated runs
 TOP_N       = 10            # How many top correlations to highlight
