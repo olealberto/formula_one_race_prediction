@@ -171,18 +171,25 @@ def _aggregate_to_driver_level(
 
     # Merge race results if provided
     if race_results is not None and not race_results.empty:
-        driver_df = driver_df.merge(race_results, on="driver", how="left")
-        # Primary target: race position
-        # Podium flag based on race result, not qualifying
+        # Drop session_label from race_results before merging to avoid
+        # column conflicts — match on driver only within each session
+        # since driver_df already has session_label
+        race_results_clean = race_results.drop(
+            columns=["session_label"], errors="ignore"
+        )
+        # Merge per session to avoid cross-race contamination
+        merged_parts = []
+        for label, group_df in driver_df.groupby("session_label"):
+            merged = group_df.merge(race_results_clean, on="driver", how="left")
+            merged_parts.append(merged)
+        driver_df = pd.concat(merged_parts, ignore_index=True)
         driver_df["podium"] = driver_df["race_podium"].fillna(0).astype(int)
         print(f"   ✅ Race results merged. "
               f"{driver_df['race_position'].notna().sum()} drivers matched.")
     else:
-        # Fall back to qualifying position as target if no race results
         driver_df["race_position"] = np.nan
         driver_df["race_podium"]   = np.nan
         driver_df["dnf"]           = np.nan
-        # Podium flag from qualifying
         driver_df["podium"] = (driver_df["quali_position"] <= 3).astype(int)
         print("   ℹ️  No race results available. Using quali_position as target.")
 
