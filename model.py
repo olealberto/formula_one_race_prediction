@@ -67,7 +67,8 @@ def select_features(
 ) -> list[str]:
     """
     Dynamically select the most predictive features using Random Forest
-    importance on delta_to_session_best as the target.
+    importance. Uses race_position as target if available, otherwise
+    falls back to delta_to_session_best from qualifying.
 
     Returns a list of the top_n feature names.
     """
@@ -77,10 +78,17 @@ def select_features(
     if not feature_cols:
         raise ValueError("No feature columns found in driver_df.")
 
-    X = driver_df[feature_cols].copy()
-    y = driver_df["delta_to_session_best"].copy()
+    # Use race position if available, otherwise qualifying delta
+    if "race_position" in driver_df.columns and driver_df["race_position"].notna().sum() > 5:
+        target_col = "race_position"
+        print("\n📊 Feature selection target: race_position")
+    else:
+        target_col = "delta_to_session_best"
+        print("\n📊 Feature selection target: delta_to_session_best (no race results)")
 
-    # Drop rows where target or any feature is NaN
+    X = driver_df[feature_cols].copy()
+    y = driver_df[target_col].copy()
+
     mask = y.notna() & X.notna().all(axis=1)
     X, y = X[mask], y[mask]
 
@@ -115,15 +123,21 @@ def _build_lambdarank_data(
 ):
     """
     Build LightGBM Dataset for LambdaRank.
-    Each race is a query group. Label is inverted quali_position
-    (higher = better, so pole = 22, last = 1 for 22 drivers).
+    Each race is a query group. Uses race_position as label if available,
+    otherwise falls back to quali_position.
+    Label is inverted so that P1 gets the highest value.
     """
-    df = driver_df.dropna(subset=feature_cols + ["delta_to_session_best"]).copy()
+    df = driver_df.dropna(subset=feature_cols).copy()
 
-    # LambdaRank label: higher = better finishing position
-    # We invert position so that pole (1) gets the highest label
-    max_drivers = df.groupby("session_label")["quali_position"].transform("max")
-    df["rank_label"] = (max_drivers - df["quali_position"] + 1).astype(int)
+    # Use race position if available
+    if "race_position" in df.columns and df["race_position"].notna().sum() > 5:
+        pos_col = "race_position"
+        df = df.dropna(subset=["race_position"])
+    else:
+        pos_col = "quali_position"
+
+    max_drivers = df.groupby("session_label")[pos_col].transform("max")
+    df["rank_label"] = (max_drivers - df[pos_col] + 1).astype(int)
 
     X      = df[feature_cols].values
     labels = df["rank_label"].values
