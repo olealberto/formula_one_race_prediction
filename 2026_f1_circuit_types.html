@@ -1,0 +1,65 @@
+
+<style>
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--color-border-tertiary); font-weight: 500; color: var(--color-text-secondary); font-size: 12px; }
+td { padding: 7px 12px; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-primary); }
+tr:last-child td { border-bottom: none; }
+.badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+.power { background: var(--color-background-danger); color: var(--color-text-danger); }
+.downforce { background: var(--color-background-success); color: var(--color-text-success); }
+.balanced { background: var(--color-background-info); color: var(--color-text-info); }
+.street { background: var(--color-background-warning); color: var(--color-text-warning); }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; font-size: 12px; }
+.cancelled { opacity: 0.4; text-decoration: line-through; }
+</style>
+
+<div style="padding: 1rem 0;">
+<div class="legend">
+  <span><span class="badge downforce">downforce</span> favours Ferrari aero</span>
+  <span><span class="badge power">power</span> favours Mercedes PU</span>
+  <span><span class="badge balanced">balanced</span> neutral</span>
+  <span><span class="badge street">street</span> mixed / unpredictable</span>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Rd</th>
+      <th>Grand Prix</th>
+      <th>Circuit type</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>Australia ✓</td><td><span class="badge balanced">balanced</span></td><td>Semi-street, mixed profile</td></tr>
+    <tr><td>2</td><td>China ✓</td><td><span class="badge balanced">balanced</span></td><td>Long straights + fast corners</td></tr>
+    <tr><td>3</td><td>Japan</td><td><span class="badge downforce">downforce</span></td><td>Suzuka — S-curves, 130R demand high DF</td></tr>
+    <tr class="cancelled"><td>4</td><td>Bahrain (cancelled)</td><td><span class="badge power">power</span></td><td>High deg, flat — PU intensive</td></tr>
+    <tr class="cancelled"><td>5</td><td>Saudi Arabia (cancelled)</td><td><span class="badge power">power</span></td><td>High speed street, longest straights</td></tr>
+    <tr><td>—</td><td>Miami</td><td><span class="badge street">street</span></td><td>Semi-street, sprint weekend</td></tr>
+    <tr><td>—</td><td>Barcelona-Catalunya</td><td><span class="badge balanced">balanced</span></td><td>Technical, good aero test</td></tr>
+    <tr><td>—</td><td>Monaco</td><td><span class="badge downforce">downforce</span></td><td>Slow corners, max DF, no overtaking</td></tr>
+    <tr><td>—</td><td>Canada</td><td><span class="badge power">power</span></td><td>Stop-start, heavy braking, power exits</td></tr>
+    <tr><td>—</td><td>Spain (Madrid)</td><td><span class="badge street">street</span></td><td>New circuit, unknown characteristics</td></tr>
+    <tr><td>—</td><td>Austria</td><td><span class="badge balanced">balanced</span></td><td>Short, fast, sprint weekend</td></tr>
+    <tr><td>—</td><td>Britain (Silverstone)</td><td><span class="badge downforce">downforce</span></td><td>High speed sweepers, DF critical</td></tr>
+    <tr><td>—</td><td>Hungary</td><td><span class="badge downforce">downforce</span></td><td>Slow twisty, maximum downforce</td></tr>
+    <tr><td>—</td><td>Belgium (Spa)</td><td><span class="badge balanced">balanced</span></td><td>Mixed — Eau Rouge needs DF, Kemmel needs PU</td></tr>
+    <tr><td>—</td><td>Netherlands (Zandvoort)</td><td><span class="badge downforce">downforce</span></td><td>Banked corners, aero sensitivity high</td></tr>
+    <tr><td>—</td><td>Italy (Monza)</td><td><span class="badge power">power</span></td><td>Temple of speed — pure PU circuit</td></tr>
+    <tr><td>—</td><td>Azerbaijan (Baku)</td><td><span class="badge power">power</span></td><td>Long straight, street circuit power fest</td></tr>
+    <tr><td>—</td><td>Singapore</td><td><span class="badge downforce">downforce</span></td><td>Slow street, maximum DF</td></tr>
+    <tr><td>—</td><td>USA (Austin)</td><td><span class="badge balanced">balanced</span></td><td>Mix of high speed and technical</td></tr>
+    <tr><td>—</td><td>Mexico</td><td><span class="badge power">power</span></td><td>High altitude reduces DF, rewards PU</td></tr>
+    <tr><td>—</td><td>Brazil (Interlagos)</td><td><span class="badge balanced">balanced</span></td><td>Elevation changes, mixed profile</td></tr>
+    <tr><td>—</td><td>Las Vegas</td><td><span class="badge power">power</span></td><td>Long straights, low DF configuration</td></tr>
+    <tr><td>—</td><td>Qatar</td><td><span class="badge downforce">downforce</span></td><td>Fast flowing, aero sensitive</td></tr>
+    <tr><td>—</td><td>Abu Dhabi</td><td><span class="badge balanced">balanced</span></td><td>Mixed, season finale</td></tr>
+  </tbody>
+</table>
+
+<div style="margin-top: 16px; font-size: 12px; color: var(--color-text-secondary);">
+  Bahrain and Saudi Arabia cancelled due to Middle East conflict. 22 rounds remain.
+  Downforce circuits: 7 &nbsp;|&nbsp; Power circuits: 6 &nbsp;|&nbsp; Balanced: 7 &nbsp;|&nbsp; Street/mixed: 2
+</div>
+</div>
