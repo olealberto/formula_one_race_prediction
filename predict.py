@@ -1,0 +1,275 @@
+"""
+predict.py
+==========
+Takes a new qualifying session, extracts features, runs trained models,
+and outputs expected top three with podium probabilities.
+
+Usage:
+    from src.predict import predict_race
+
+    results = predict_race(
+        year     = 2026,
+        gp       = "Japan",
+        session  = "Q",
+        save_dir = "models",
+    )
+
+Or from the command line via main.py.
+"""
+
+import os
+import warnings
+import numpy as np
+import pandas as pd
+import fastf1
+warnings.filterwarnings("ignore")
+
+from src.features import extract_features_from_session
+from src.dataset  import _aggregate_to_driver_level
+from src.model    import load_models
+
+
+# ── PROBABILITY CONVERSION ────────────────────────────────────────────────────
+
+def _ranking_scores_to_probabilities(
+    scores: np.ndarray,
+    top_n: int = 3,
+    temperature: float = 2.0,
+) -> np.ndarray:
+    """
+    Convert raw LambdaRank scores to podium probabilities using a
+    softmax with temperature scaling.
+
+    Higher temperature = more spread out probabilities (more uncertainty).
+    Lower temperature = more confident predictions.
+
+    With limited training data, a higher temperature is more honest.
+    """
+    scaled = scores * temperature
+    exp    = np.exp(scaled - scaled.max())  # numerical stability
+    probs  = exp / exp.sum()
+    return probs
+
+
+def _build_prediction_table(
+    driver_df: pd.DataFrame,
+    ranking_scores: np.ndarray,
+    podium_probs: np.ndarray,
+    softmax_probs: np.ndarray,
+) -> pd.DataFrame:
+    """
+    Assemble the final prediction DataFrame sorted by predicted position.
+    """
+    df = driver_df.copy().reset_index(drop=True)
+
+    df["ranking_score"]       = ranking_scores
+    df["podium_probability"]  = podium_probs
+    df["top3_probability"]    = softmax_probs
+
+    # Predicted position: rank by ranking score descending (higher = better)
+    df["predicted_position"] = (
+        df["ranking_score"]
+        .rank(ascending=False, method="min")
+        .astype(int)
+    )
+
+    # Blend the two probability signals:
+    # - podium_probability: calibrated RF, trained on binary top-3 label
+    # - top3_probability:   softmax over ranking scores, captures relative gaps
+    # Simple average; can be tuned as more data accumulates
+    df["blended_podium_pct"] = (
+        (df["podium_probability"] + df["top3_probability"]) / 2 * 100
+    ).round(1)
+
+    return df.sort_values("predicted_position").reset_index(drop=True)
+
+
+# ── CORE PREDICTION FUNCTION ──────────────────────────────────────────────────
+
+def predict_race(
+    year:      int,
+    gp:        str,
+    session:   str      = "Q",
+    save_dir:  str      = "models",
+    cache_dir: str      = "./f1_cache",
+    verbose:   bool     = True,
+) -> pd.DataFrame:
+    """
+    Load a qualifying session, extract features, and predict finishing order.
+
+    Parameters
+    ----------
+    year      : race year  (e.g. 2026)
+    gp        : grand prix name (e.g. "Japan")
+    session   : session type — "Q" for qualifying
+    save_dir  : directory where trained models are saved
+    cache_dir : FastF1 cache directory
+    verbose   : print prediction table to console
+
+    Returns
+    -------
+    DataFrame with one row per driver, sorted by predicted position, columns:
+        driver, predicted_position, blended_podium_pct,
+        podium_probability, top3_probability,
+        delta_to_session_best (actual, if session is complete),
+        quali_position (actual, if session is complete),
+        + all feature values used by the model
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    fastf1.Cache.enable_cache(cache_dir)
+
+    # ── Load models ───────────────────────────────────────────────────────────
+    ranking_model, podium_model, feature_cols = load_models(save_dir)
+
+    # ── Load and extract session ──────────────────────────────────────────────
+    print(f"\n⏳ Loading {year} {gp} {session} for prediction...")
+    try:
+        sess = fastf1.get_session(year, gp, session)
+        sess.load(telemetry=True, weather=False, messages=False)
+    except Exception as e:
+        raise RuntimeError(f"Could not load {year} {gp} {session}: {e}")
+
+    lap_df = extract_features_from_session(sess)
+    if lap_df.empty:
+        raise ValueError("No valid laps extracted from session.")
+
+    # ── Aggregate to driver level ─────────────────────────────────────────────
+    driver_df = _aggregate_to_driver_level(lap_df)
+
+    # ── Check feature availability ────────────────────────────────────────────
+    missing = [f for f in feature_cols if f not in driver_df.columns]
+    if missing:
+        print(f"⚠️  Missing features: {missing}")
+        print(   "   These will be filled with column means from available data.")
+        for f in missing:
+            driver_df[f] = np.nan
+
+    # Fill any remaining NaNs with column means (last resort)
+    X = driver_df[feature_cols].copy()
+    X = X.fillna(X.mean())
+
+    # ── Run models ────────────────────────────────────────────────────────────
+    ranking_scores = ranking_model.predict(X.values)
+    podium_probs   = podium_model.predict_proba(X.values)[:, 1]
+    softmax_probs  = _ranking_scores_to_probabilities(ranking_scores, top_n=3)
+
+    # ── Build output ──────────────────────────────────────────────────────────
+    predictions = _build_prediction_table(
+        driver_df, ranking_scores, podium_probs, softmax_probs
+    )
+
+    # ── Print results ─────────────────────────────────────────────────────────
+    if verbose:
+        _print_predictions(predictions, year, gp, session, feature_cols)
+
+    return predictions
+
+
+# ── DISPLAY ───────────────────────────────────────────────────────────────────
+
+def _print_predictions(
+    predictions: pd.DataFrame,
+    year: int,
+    gp: str,
+    session: str,
+    feature_cols: list[str],
+):
+    has_actual = "quali_position" in predictions.columns
+
+    print(f"\n{'═'*62}")
+    print(f"  PREDICTIONS — {year} {gp} {session}")
+    print(f"{'═'*62}")
+
+    # Expected top 3
+    top3 = predictions.head(3)
+    print(f"\n  🏆 EXPECTED TOP 3")
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (_, row) in enumerate(top3.iterrows()):
+        actual_str = ""
+        if has_actual and not pd.isna(row.get("quali_position")):
+            actual_str = f"  (actual P{int(row['quali_position'])})"
+        print(f"     {medals[i]} P{i+1}  {row['driver']:<6}  "
+              f"{row['blended_podium_pct']:>5.1f}% podium chance"
+              f"{actual_str}")
+
+    # Full grid
+    print(f"\n  {'Pos':>4}  {'Driver':<6}  {'Podium%':>8}  ", end="")
+    if has_actual:
+        print(f"{'Actual':>7}  {'Δ Pos':>6}", end="")
+    print()
+    print(f"  {'─'*50}")
+
+    for _, row in predictions.iterrows():
+        pred_pos = int(row["predicted_position"])
+        actual_str = ""
+        delta_str  = ""
+        if has_actual and not pd.isna(row.get("quali_position")):
+            actual = int(row["quali_position"])
+            delta  = actual - pred_pos
+            actual_str = f"{actual:>7}"
+            delta_str  = f"  {delta:>+5}" if delta != 0 else f"  {'✓':>5}"
+
+        print(f"  {pred_pos:>4}  {row['driver']:<6}  "
+              f"{row['blended_podium_pct']:>7.1f}%"
+              f"{actual_str}{delta_str}")
+
+    # Features used
+    print(f"\n  Features used: {feature_cols}")
+    print(f"{'═'*62}")
+
+
+# ── ACCURACY SUMMARY (post-race) ──────────────────────────────────────────────
+
+def evaluate_prediction(predictions: pd.DataFrame) -> dict:
+    """
+    After a race weekend, compare predictions to actual qualifying results.
+    Call this once quali_position is populated in the predictions DataFrame.
+
+    Returns a dict of accuracy metrics.
+    """
+    if "quali_position" not in predictions.columns:
+        raise ValueError("quali_position not available. Session may not be complete.")
+
+    df = predictions.dropna(subset=["quali_position", "predicted_position"])
+
+    # Top 3 overlap
+    pred_top3   = set(df[df["predicted_position"] <= 3]["driver"])
+    actual_top3 = set(df[df["quali_position"]     <= 3]["driver"])
+    top3_hits   = len(pred_top3 & actual_top3)
+
+    # Mean absolute error on position
+    mae = (df["predicted_position"] - df["quali_position"]).abs().mean()
+
+    # Spearman rank correlation
+    from scipy.stats import spearmanr
+    rho, pval = spearmanr(df["predicted_position"], df["quali_position"])
+
+    # Podium probability calibration: did high probability drivers finish top 3?
+    if "blended_podium_pct" in df.columns:
+        top3_avg_prob = df[df["quali_position"] <= 3]["blended_podium_pct"].mean()
+        rest_avg_prob = df[df["quali_position"]  > 3]["blended_podium_pct"].mean()
+    else:
+        top3_avg_prob = rest_avg_prob = np.nan
+
+    metrics = {
+        "top3_hits":       top3_hits,
+        "top3_overlap":    f"{top3_hits}/3",
+        "mae_positions":   round(mae, 2),
+        "spearman_rho":    round(rho, 3),
+        "spearman_pval":   round(pval, 3),
+        "top3_avg_prob":   round(top3_avg_prob, 1),
+        "rest_avg_prob":   round(rest_avg_prob, 1),
+    }
+
+    print(f"\n{'═'*50}")
+    print(f"  POST-RACE ACCURACY SUMMARY")
+    print(f"{'═'*50}")
+    print(f"  Top 3 overlap       : {metrics['top3_overlap']}")
+    print(f"  Mean position error : {metrics['mae_positions']} places")
+    print(f"  Spearman ρ          : {metrics['spearman_rho']} "
+          f"(p={metrics['spearman_pval']})")
+    print(f"  Avg podium prob — actual top 3 : {metrics['top3_avg_prob']}%")
+    print(f"  Avg podium prob — rest of grid : {metrics['rest_avg_prob']}%")
+    print(f"{'═'*50}")
+
+    return metrics
