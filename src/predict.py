@@ -144,7 +144,23 @@ def predict_race(
     print(f"   Fetching race results for evaluation (if available)...")
     race_results = _load_race_results(year, gp, cache_dir)
     if not race_results.empty:
-        driver_df = driver_df.merge(race_results, on="driver", how="left")
+        # Clean up any existing race result columns before merging
+        # to avoid _x/_y duplicates from training data bleed
+        for col in ["race_position", "race_podium", "dnf"]:
+            if col in driver_df.columns:
+                driver_df = driver_df.drop(columns=[col], errors="ignore")
+        driver_df = driver_df.merge(
+            race_results[["driver", "race_position", "race_podium", "dnf"]],
+            on="driver",
+            how="left"
+        )
+        # Clean up any remaining _x/_y duplicates
+        for col in ["race_position", "race_podium", "dnf"]:
+            if f"{col}_x" in driver_df.columns:
+                driver_df[col] = driver_df[f"{col}_x"]
+                driver_df = driver_df.drop(
+                    columns=[f"{col}_x", f"{col}_y"], errors="ignore"
+                )
 
     # ── Check feature availability ────────────────────────────────────────────
     missing = [f for f in feature_cols if f not in driver_df.columns]
