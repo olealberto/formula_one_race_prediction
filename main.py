@@ -122,8 +122,8 @@ def main():
         help="Reload saved dataset instead of re-downloading telemetry"
     )
     train_parser.add_argument(
-        "--top-n", type=int, default=8,
-        help="Number of features to select dynamically (default: 8)"
+        "--top-n", type=int, default=4,
+        help="Number of features to select dynamically (default: 4)"
     )
     train_parser.add_argument(
         "--skip-eval", action="store_true",
