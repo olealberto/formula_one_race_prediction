@@ -247,7 +247,7 @@ def build_dataset(
         all_lap_dfs.append(driver_lap_df)
 
         # Store race results keyed by session label for later merging
-        session_label = f"{year}_{gp}_Q".replace(" ", "_")
+        session_label = f"{year}_{sess.event['EventName']}_Q".replace(" ", "_")
         if not race_results.empty:
             race_results["session_label"] = session_label
             all_race_results.append(race_results)
