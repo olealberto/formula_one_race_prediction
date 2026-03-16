@@ -1,8 +1,10 @@
 # formula_one_race_prediction is race by race predictive modeling for 2026 formula one season. (it's probably mercedes this year)
 
-### The pipeline would look something like:
+### The pipeline looks something like:
 First, establish a feature set from already completed circuits in 2026. fully validated features show up in multiple races.
+
 Second, for each new race weekend, extract those same features from qualifying telemetry. This is the input to the model.
+
 Third, the model outputs predicted finishing positions or probabilities.
 
 
