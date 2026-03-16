@@ -5,9 +5,14 @@ Builds the training dataset by loading qualifying sessions across
 multiple race weekends, extracting features via features.py, and
 aggregating from lap level to driver level.
 
+Also loads race finishing positions from the corresponding race session
+so the model can learn qualifying telemetry -> race result, not just
+qualifying telemetry -> qualifying position.
+
 The output is two DataFrames:
     - lap_df    : one row per lap (used for model training)
     - driver_df : one row per driver per race (used for ranking and evaluation)
+                  includes both quali_position and race_position as targets
 
 Usage:
     from src.dataset import build_dataset
@@ -67,15 +72,60 @@ def _load_session(year: int, gp: str, session_type: str, cache_dir: str):
         return None
 
 
-def _aggregate_to_driver_level(lap_df: pd.DataFrame) -> pd.DataFrame:
+def _load_race_results(year: int, gp: str, cache_dir: str) -> pd.DataFrame:
+    """
+    Load race finishing positions for a given GP.
+    Returns a DataFrame with columns: driver, race_position, race_podium.
+    DNFs are assigned positions after all classified finishers.
+    Returns empty DataFrame if race session unavailable.
+    """
+    try:
+        race = fastf1.get_session(year, gp, "R")
+        race.load(telemetry=False, weather=False, messages=False)
+
+        results = race.results[["Abbreviation", "Position", "Status"]].copy()
+        results.columns = ["driver", "race_position", "status"]
+
+        # Position is NaN for DNFs — assign them positions after last finisher
+        classified = results["race_position"].notna().sum()
+        dnf_mask   = results["race_position"].isna()
+        results.loc[dnf_mask, "race_position"] = range(
+            int(classified) + 1,
+            int(classified) + 1 + dnf_mask.sum()
+        )
+
+        results["race_position"] = results["race_position"].astype(int)
+        results["race_podium"]   = (results["race_position"] <= 3).astype(int)
+        results["dnf"]           = (~results["status"].str.contains(
+                                        "Finished|Lap", na=False
+                                    )).astype(int)
+
+        print(f"   ✅ Race results loaded for {year} {gp} "
+              f"({len(results)} drivers, "
+              f"{dnf_mask.sum()} DNF/DNS)")
+        return results[["driver", "race_position", "race_podium", "dnf"]]
+
+    except Exception as e:
+        print(f"   ⚠️  Could not load race results for {year} {gp}: {e}")
+        return pd.DataFrame()
+
+
+def _aggregate_to_driver_level(
+    lap_df: pd.DataFrame,
+    race_results: pd.DataFrame = None,
+) -> pd.DataFrame:
     """
     Aggregate lap-level features to one row per driver per session.
 
     For each driver we compute:
     - Features from their personal best lap (fastest lap_time_s)
-    - Mean of each feature across all their laps (consistency signal)
     - Their best lap time and delta to session best
     - Their qualifying position (rank by best lap time within session)
+    - Their race finishing position (if race_results provided)
+
+    race_results : DataFrame with driver, race_position, race_podium, dnf
+                   If provided, merged onto driver_df so the model can learn
+                   qualifying telemetry -> race result
     """
     records = []
     feature_cols = get_feature_names(lap_df)
@@ -119,8 +169,22 @@ def _aggregate_to_driver_level(lap_df: pd.DataFrame) -> pd.DataFrame:
         .astype(int)
     )
 
-    # Podium flag — target variable for classification (top 3)
-    driver_df["podium"] = (driver_df["quali_position"] <= 3).astype(int)
+    # Merge race results if provided
+    if race_results is not None and not race_results.empty:
+        driver_df = driver_df.merge(race_results, on="driver", how="left")
+        # Primary target: race position
+        # Podium flag based on race result, not qualifying
+        driver_df["podium"] = driver_df["race_podium"].fillna(0).astype(int)
+        print(f"   ✅ Race results merged. "
+              f"{driver_df['race_position'].notna().sum()} drivers matched.")
+    else:
+        # Fall back to qualifying position as target if no race results
+        driver_df["race_position"] = np.nan
+        driver_df["race_podium"]   = np.nan
+        driver_df["dnf"]           = np.nan
+        # Podium flag from qualifying
+        driver_df["podium"] = (driver_df["quali_position"] <= 3).astype(int)
+        print("   ℹ️  No race results available. Using quali_position as target.")
 
     return driver_df.sort_values(
         ["session_label", "quali_position"]
@@ -151,7 +215,8 @@ def build_dataset(
     os.makedirs(cache_dir, exist_ok=True)
     fastf1.Cache.enable_cache(cache_dir)
 
-    all_lap_dfs = []
+    all_lap_dfs       = []
+    all_race_results  = []
 
     for cfg in races:
         year    = cfg["year"]
@@ -170,7 +235,19 @@ def build_dataset(
         if lap_df.empty:
             continue
 
-        all_lap_dfs.append(lap_df)
+        # Load corresponding race results
+        print(f"   Loading race results for {year} {gp}...")
+        race_results = _load_race_results(year, gp, cache_dir)
+
+        # Aggregate to driver level and merge race results
+        driver_lap_df = lap_df.copy()
+        all_lap_dfs.append(driver_lap_df)
+
+        # Store race results keyed by session label for later merging
+        session_label = f"{year}_{gp}_Q".replace(" ", "_")
+        if not race_results.empty:
+            race_results["session_label"] = session_label
+            all_race_results.append(race_results)
 
     if not all_lap_dfs:
         print("\n❌ No data loaded. Check race configs and internet connection.")
@@ -186,8 +263,17 @@ def build_dataset(
         print(f"\n   Dropping globally unavailable features: {all_nan}")
         combined_lap_df = combined_lap_df.drop(columns=all_nan)
 
-    # Aggregate to driver level
-    driver_df = _aggregate_to_driver_level(combined_lap_df)
+    # Combine race results across all weekends
+    combined_race_results = (
+        pd.concat(all_race_results, ignore_index=True)
+        if all_race_results else pd.DataFrame()
+    )
+
+    # Aggregate to driver level with race results merged in
+    driver_df = _aggregate_to_driver_level(
+        combined_lap_df,
+        race_results=combined_race_results if not combined_race_results.empty else None,
+    )
 
     # Summary
     print(f"\n{'═'*55}")
