@@ -4,13 +4,15 @@ predict.py
 Takes a new qualifying session, extracts features, runs trained models,
 and outputs expected top three with podium probabilities.
 
+Always uses qualifying telemetry as input.
+Fetches race results separately for evaluation if available.
+
 Usage:
     from src.predict import predict_race
 
     results = predict_race(
         year     = 2026,
         gp       = "Japan",
-        session  = "Q",
         save_dir = "models",
     )
 
@@ -25,7 +27,7 @@ import fastf1
 warnings.filterwarnings("ignore")
 
 from src.features import extract_features_from_session
-from src.dataset  import _aggregate_to_driver_level
+from src.dataset  import _aggregate_to_driver_level, _load_race_results
 from src.model    import load_models
 
 
@@ -89,19 +91,21 @@ def _build_prediction_table(
 def predict_race(
     year:      int,
     gp:        str,
-    session:   str      = "Q",
-    save_dir:  str      = "models",
-    cache_dir: str      = "./f1_cache",
-    verbose:   bool     = True,
+    save_dir:  str  = "models",
+    cache_dir: str  = "./f1_cache",
+    verbose:   bool = True,
 ) -> pd.DataFrame:
     """
-    Load a qualifying session, extract features, and predict finishing order.
+    Load qualifying telemetry, extract features, and predict race finishing order.
+
+    Always uses Q session as input — race telemetry is never used.
+    Fetches race results separately and merges them onto the output
+    so evaluate_prediction() can score against actual race finish.
 
     Parameters
     ----------
     year      : race year  (e.g. 2026)
     gp        : grand prix name (e.g. "Japan")
-    session   : session type — "Q" for qualifying
     save_dir  : directory where trained models are saved
     cache_dir : FastF1 cache directory
     verbose   : print prediction table to console
@@ -110,9 +114,8 @@ def predict_race(
     -------
     DataFrame with one row per driver, sorted by predicted position, columns:
         driver, predicted_position, blended_podium_pct,
-        podium_probability, top3_probability,
-        delta_to_session_best (actual, if session is complete),
-        quali_position (actual, if session is complete),
+        quali_position (actual qualifying position),
+        race_position  (actual race finish, if race has happened),
         + all feature values used by the model
     """
     os.makedirs(cache_dir, exist_ok=True)
@@ -121,20 +124,27 @@ def predict_race(
     # ── Load models ───────────────────────────────────────────────────────────
     ranking_model, podium_model, feature_cols = load_models(save_dir)
 
-    # ── Load and extract session ──────────────────────────────────────────────
-    print(f"\n⏳ Loading {year} {gp} {session} for prediction...")
+    # ── Always load qualifying telemetry as input ─────────────────────────────
+    print(f"\n⏳ Loading {year} {gp} Q for prediction...")
     try:
-        sess = fastf1.get_session(year, gp, session)
+        sess = fastf1.get_session(year, gp, "Q")
         sess.load(telemetry=True, weather=False, messages=False)
     except Exception as e:
-        raise RuntimeError(f"Could not load {year} {gp} {session}: {e}")
+        raise RuntimeError(f"Could not load {year} {gp} Q: {e}")
 
     lap_df = extract_features_from_session(sess)
     if lap_df.empty:
-        raise ValueError("No valid laps extracted from session.")
+        raise ValueError("No valid laps extracted from qualifying session.")
 
     # ── Aggregate to driver level ─────────────────────────────────────────────
     driver_df = _aggregate_to_driver_level(lap_df)
+
+    # ── Fetch race results separately for evaluation ──────────────────────────
+    # This will be None if the race hasn't happened yet — handled gracefully
+    print(f"   Fetching race results for evaluation (if available)...")
+    race_results = _load_race_results(year, gp, cache_dir)
+    if not race_results.empty:
+        driver_df = driver_df.merge(race_results, on="driver", how="left")
 
     # ── Check feature availability ────────────────────────────────────────────
     missing = [f for f in feature_cols if f not in driver_df.columns]
@@ -160,7 +170,7 @@ def predict_race(
 
     # ── Print results ─────────────────────────────────────────────────────────
     if verbose:
-        _print_predictions(predictions, year, gp, session, feature_cols)
+        _print_predictions(predictions, year, gp, feature_cols)
 
     return predictions
 
@@ -171,41 +181,47 @@ def _print_predictions(
     predictions: pd.DataFrame,
     year: int,
     gp: str,
-    session: str,
     feature_cols: list[str],
 ):
-    has_actual = "quali_position" in predictions.columns
+    has_race  = "race_position" in predictions.columns and \
+                predictions["race_position"].notna().any()
+    has_quali = "quali_position" in predictions.columns
+
+    # Show race result if available, otherwise qualifying
+    actual_col   = "race_position" if has_race else \
+                   "quali_position" if has_quali else None
+    actual_label = "Race" if has_race else "Quali" if has_quali else None
 
     print(f"\n{'═'*62}")
-    print(f"  PREDICTIONS — {year} {gp} {session}")
+    print(f"  PREDICTED RACE FINISH — {year} {gp}")
+    if actual_col:
+        print(f"  Actual shown: {actual_label} position")
     print(f"{'═'*62}")
 
-    # Expected top 3
     top3 = predictions.head(3)
     print(f"\n  🏆 EXPECTED TOP 3")
     medals = ["🥇", "🥈", "🥉"]
     for i, (_, row) in enumerate(top3.iterrows()):
         actual_str = ""
-        if has_actual and not pd.isna(row.get("quali_position")):
-            actual_str = f"  (actual P{int(row['quali_position'])})"
+        if actual_col and not pd.isna(row.get(actual_col)):
+            actual_str = f"  (actual P{int(row[actual_col])})"
         print(f"     {medals[i]} P{i+1}  {row['driver']:<6}  "
               f"{row['blended_podium_pct']:>5.1f}% podium chance"
               f"{actual_str}")
 
-    # Full grid
     print(f"\n  {'Pos':>4}  {'Driver':<6}  {'Podium%':>8}  ", end="")
-    if has_actual:
-        print(f"{'Actual':>7}  {'Δ Pos':>6}", end="")
+    if actual_col:
+        print(f"{actual_label:>7}  {'Δ Pos':>6}", end="")
     print()
     print(f"  {'─'*50}")
 
     for _, row in predictions.iterrows():
-        pred_pos = int(row["predicted_position"])
+        pred_pos   = int(row["predicted_position"])
         actual_str = ""
         delta_str  = ""
-        if has_actual and not pd.isna(row.get("quali_position")):
-            actual = int(row["quali_position"])
-            delta  = actual - pred_pos
+        if actual_col and not pd.isna(row.get(actual_col)):
+            actual    = int(row[actual_col])
+            delta     = actual - pred_pos
             actual_str = f"{actual:>7}"
             delta_str  = f"  {delta:>+5}" if delta != 0 else f"  {'✓':>5}"
 
@@ -213,7 +229,6 @@ def _print_predictions(
               f"{row['blended_podium_pct']:>7.1f}%"
               f"{actual_str}{delta_str}")
 
-    # Features used
     print(f"\n  Features used: {feature_cols}")
     print(f"{'═'*62}")
 
