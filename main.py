@@ -74,12 +74,11 @@ def cmd_train(args):
 def cmd_predict(args):
     """Predict an upcoming race."""
     print(f"\n🏎️  F1 PREDICTION PIPELINE — PREDICT MODE")
-    print(f"   {args.year} {args.gp} {args.session}")
+    print(f"   {args.year} {args.gp}")
 
     predictions = predict_race(
         year      = args.year,
         gp        = args.gp,
-        session   = args.session,
         save_dir  = MODELS_DIR,
         cache_dir = CACHE_DIR,
     )
@@ -122,8 +121,8 @@ def main():
         help="Reload saved dataset instead of re-downloading telemetry"
     )
     train_parser.add_argument(
-        "--top-n", type=int, default=4,
-        help="Number of features to select dynamically (default: 4)"
+        "--top-n", type=int, default=8,
+        help="Number of features to select dynamically (default: 8)"
     )
     train_parser.add_argument(
         "--skip-eval", action="store_true",
@@ -132,9 +131,8 @@ def main():
 
     # predict
     predict_parser = subparsers.add_parser("predict", help="Predict a race")
-    predict_parser.add_argument("--year",    type=int, required=True)
-    predict_parser.add_argument("--gp",      type=str, required=True)
-    predict_parser.add_argument("--session", type=str, default="Q")
+    predict_parser.add_argument("--year", type=int, required=True)
+    predict_parser.add_argument("--gp",   type=str, required=True)
 
     # evaluate
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate a prediction")
