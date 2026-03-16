@@ -222,48 +222,56 @@ def _print_predictions(
 
 def evaluate_prediction(predictions: pd.DataFrame) -> dict:
     """
-    After a race weekend, compare predictions to actual qualifying results.
-    Call this once quali_position is populated in the predictions DataFrame.
-
-    Returns a dict of accuracy metrics.
+    After a race weekend, compare predictions to actual results.
+    Uses race_position if available, otherwise falls back to quali_position.
     """
-    if "quali_position" not in predictions.columns:
-        raise ValueError("quali_position not available. Session may not be complete.")
+    # Prefer race_position as the ground truth
+    if "race_position" in predictions.columns and predictions["race_position"].notna().sum() > 3:
+        actual_col  = "race_position"
+        actual_top3 = set(predictions[predictions["race_position"] <= 3]["driver"])
+        print("\n📊 Evaluating against: race_position")
+    elif "quali_position" in predictions.columns:
+        actual_col  = "quali_position"
+        actual_top3 = set(predictions[predictions["quali_position"] <= 3]["driver"])
+        print("\n📊 Evaluating against: quali_position (no race results yet)")
+    else:
+        raise ValueError("No position data available for evaluation.")
 
-    df = predictions.dropna(subset=["quali_position", "predicted_position"])
+    df = predictions.dropna(subset=[actual_col, "predicted_position"])
 
     # Top 3 overlap
-    pred_top3   = set(df[df["predicted_position"] <= 3]["driver"])
-    actual_top3 = set(df[df["quali_position"]     <= 3]["driver"])
-    top3_hits   = len(pred_top3 & actual_top3)
+    pred_top3  = set(df[df["predicted_position"] <= 3]["driver"])
+    top3_hits  = len(pred_top3 & actual_top3)
 
     # Mean absolute error on position
-    mae = (df["predicted_position"] - df["quali_position"]).abs().mean()
+    mae = (df["predicted_position"] - df[actual_col]).abs().mean()
 
     # Spearman rank correlation
     from scipy.stats import spearmanr
-    rho, pval = spearmanr(df["predicted_position"], df["quali_position"])
+    rho, pval = spearmanr(df["predicted_position"], df[actual_col])
 
-    # Podium probability calibration: did high probability drivers finish top 3?
+    # Podium probability calibration
     if "blended_podium_pct" in df.columns:
-        top3_avg_prob = df[df["quali_position"] <= 3]["blended_podium_pct"].mean()
-        rest_avg_prob = df[df["quali_position"]  > 3]["blended_podium_pct"].mean()
+        top3_avg_prob = df[df[actual_col] <= 3]["blended_podium_pct"].mean()
+        rest_avg_prob = df[df[actual_col]  > 3]["blended_podium_pct"].mean()
     else:
         top3_avg_prob = rest_avg_prob = np.nan
 
     metrics = {
-        "top3_hits":       top3_hits,
-        "top3_overlap":    f"{top3_hits}/3",
-        "mae_positions":   round(mae, 2),
-        "spearman_rho":    round(rho, 3),
-        "spearman_pval":   round(pval, 3),
-        "top3_avg_prob":   round(top3_avg_prob, 1),
-        "rest_avg_prob":   round(rest_avg_prob, 1),
+        "evaluated_against": actual_col,
+        "top3_hits":         top3_hits,
+        "top3_overlap":      f"{top3_hits}/3",
+        "mae_positions":     round(mae, 2),
+        "spearman_rho":      round(rho, 3),
+        "spearman_pval":     round(pval, 3),
+        "top3_avg_prob":     round(top3_avg_prob, 1),
+        "rest_avg_prob":     round(rest_avg_prob, 1),
     }
 
     print(f"\n{'═'*50}")
     print(f"  POST-RACE ACCURACY SUMMARY")
     print(f"{'═'*50}")
+    print(f"  Evaluated against   : {actual_col}")
     print(f"  Top 3 overlap       : {metrics['top3_overlap']}")
     print(f"  Mean position error : {metrics['mae_positions']} places")
     print(f"  Spearman ρ          : {metrics['spearman_rho']} "
