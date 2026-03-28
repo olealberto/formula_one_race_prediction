@@ -118,31 +118,24 @@ def select_features(
 # ── RANKING MODEL (LightGBM LambdaRank) ──────────────────────────────────────
 
 def _build_lambdarank_data(
-    driver_df: pd.DataFrame,
+    training_df: pd.DataFrame,
     feature_cols: list[str],
 ):
     """
     Build LightGBM Dataset for LambdaRank.
-    Each race is a query group. Uses race_position as label if available,
-    otherwise falls back to quali_position.
-    Label is inverted so that P1 gets the highest value.
+    Each session is a query group.
+    training_df can be lap-level (one row per lap) or driver-level
+    (one row per driver) — both work, lap-level gives more training signal.
+    Label is inverted race_position so P1 gets the highest label.
     """
-    df = driver_df.dropna(subset=feature_cols).copy()
+    df = training_df.dropna(subset=feature_cols + ["race_position"]).copy()
 
-    # Use race position if available
-    if "race_position" in df.columns and df["race_position"].notna().sum() > 5:
-        pos_col = "race_position"
-        df = df.dropna(subset=["race_position"])
-    else:
-        pos_col = "quali_position"
-
-    max_drivers = df.groupby("session_label")[pos_col].transform("max")
-    df["rank_label"] = (max_drivers - df[pos_col] + 1).astype(int)
+    max_pos = df.groupby("session_label")["race_position"].transform("max")
+    df["rank_label"] = (max_pos - df["race_position"] + 1).astype(int)
 
     X      = df[feature_cols].values
     labels = df["rank_label"].values
 
-    # Group sizes: number of drivers per session in order
     group_sizes = (
         df.groupby("session_label", sort=False)
         .size()
@@ -161,13 +154,17 @@ def _build_lambdarank_data(
 
 
 def train_ranking_model(
-    driver_df: pd.DataFrame,
+    lap_training_df: pd.DataFrame,
     feature_cols: list[str],
 ) -> lgb.Booster:
-    """Train LightGBM LambdaRank model on all available races."""
-    print("\n⏳ Training LambdaRank model...")
+    """
+    Train LambdaRank on lap-level training data.
+    Each qualifying lap is one training row, tagged with its driver's
+    race finishing position. Gives ~10x more rows than driver-level training.
+    """
+    print(f"\n⏳ Training LambdaRank on {len(lap_training_df)} lap-level rows...")
 
-    dataset, _ = _build_lambdarank_data(driver_df, feature_cols)
+    dataset, _ = _build_lambdarank_data(lap_training_df, feature_cols)
 
     model = lgb.train(
         LIGHTGBM_PARAMS,
@@ -364,49 +361,65 @@ def load_models(save_dir: str = "models"):
 
 def train(
     driver_df: pd.DataFrame,
+    lap_training_df: pd.DataFrame,
     save_dir: str = "models",
     top_n_features: int = TOP_N_FEATURES,
     run_evaluation: bool = True,
+    force_features: list = None,
 ) -> tuple:
     """
     Full training pipeline:
-    1. Select features dynamically
+    1. Select features dynamically OR use hardcoded feature list
     2. Optionally run leave-one-race-out evaluation
-    3. Train final models on all data
-    4. Save everything to disk
+    3. Train LambdaRank on lap-level data (more rows = better learning)
+    4. Train podium classifier on driver-level data
+    5. Save everything to disk
 
     Parameters
     ----------
-    driver_df      : output of dataset.build_dataset()
-    save_dir       : where to save models
-    top_n_features : how many features to select
-    run_evaluation : whether to run LORO evaluation before final training
+    driver_df       : one row per driver per race — used for podium model and evaluation
+    lap_training_df : one row per qualifying lap with race_position target — used for LambdaRank
+    save_dir        : where to save models
+    top_n_features  : how many features to select dynamically
+    run_evaluation  : whether to run LORO evaluation before final training
+    force_features  : if provided, skip dynamic selection and use this list
 
     Returns
     -------
     ranking_model, podium_model, feature_cols, importance_df
     """
     n_races = driver_df["session_label"].nunique()
+    n_laps  = len(lap_training_df)
     print(f"\n{'═'*55}")
-    print(f"  TRAINING on {n_races} race(s)")
+    print(f"  TRAINING on {n_races} race(s), {n_laps} lap training rows")
     print(f"{'═'*55}")
 
     if n_races < MIN_RACES:
         print(f"⚠️  Only {n_races} race(s) available. "
               f"Minimum recommended is {MIN_RACES}.")
 
-    # Step 1: Feature selection
-    feature_cols, importance_df = select_features(driver_df, top_n_features)
+    # Step 1: Feature selection — run on driver_df for stable importance ranking
+    if force_features:
+        feature_cols = force_features
+        importance_df = pd.DataFrame({
+            "feature":    force_features,
+            "importance": [1/len(force_features)] * len(force_features),
+        })
+        print(f"\n📊 Using hardcoded validated features: {feature_cols}")
+    else:
+        feature_cols, importance_df = select_features(driver_df, top_n_features)
 
-    # Step 2: Evaluation
+    # Step 2: Evaluation on driver-level data
     if run_evaluation and n_races >= MIN_RACES:
         evaluate_leave_one_race_out(driver_df, feature_cols)
 
-    # Step 3: Final models trained on all data
-    ranking_model = train_ranking_model(driver_df, feature_cols)
+    # Step 3: LambdaRank trained on lap-level data for more signal
+    ranking_model = train_ranking_model(lap_training_df, feature_cols)
+
+    # Step 4: Podium classifier on driver-level data
     podium_model  = train_podium_model(driver_df, feature_cols)
 
-    # Step 4: Save
+    # Step 5: Save
     save_models(ranking_model, podium_model, feature_cols,
                 importance_df, save_dir)
 

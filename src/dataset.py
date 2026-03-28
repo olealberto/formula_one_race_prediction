@@ -247,6 +247,7 @@ def build_dataset(
         all_lap_dfs.append(driver_lap_df)
 
         # Store race results keyed by session label for later merging
+        # Use the same label format as extract_features_from_session
         session_label = f"{year}_{sess.event['EventName']}_{sess.name}".replace(" ", "_")
         if not race_results.empty:
             race_results["session_label"] = session_label
@@ -278,46 +279,116 @@ def build_dataset(
         race_results=combined_race_results if not combined_race_results.empty else None,
     )
 
+    # Build lap-level training dataframe for LambdaRank
+    # Each qualifying lap tagged with its driver's race finishing position
+    # Gives ~10x more training rows than driver-level aggregation
+    lap_training_df = build_lap_training_df(
+        combined_lap_df,
+        combined_race_results if not combined_race_results.empty else pd.DataFrame(),
+    )
+
     # Summary
     print(f"\n{'═'*55}")
     print(f"  DATASET SUMMARY")
     print(f"{'═'*55}")
-    print(f"  Sessions loaded : {combined_lap_df['session_label'].nunique()}")
-    print(f"  Total laps      : {len(combined_lap_df)}")
-    print(f"  Total drivers   : {combined_lap_df['driver'].nunique()}")
-    print(f"  Features active : {len(get_feature_names(combined_lap_df))}")
-    print(f"  Driver rows     : {len(driver_df)}")
+    print(f"  Sessions loaded   : {combined_lap_df['session_label'].nunique()}")
+    print(f"  Total laps        : {len(combined_lap_df)}")
+    print(f"  Total drivers     : {combined_lap_df['driver'].nunique()}")
+    print(f"  Features active   : {len(get_feature_names(combined_lap_df))}")
+    print(f"  Driver rows       : {len(driver_df)}")
+    print(f"  Lap training rows : {len(lap_training_df)}")
     print(f"{'═'*55}")
 
     # Optionally persist to disk
     if save_path:
         os.makedirs(save_path, exist_ok=True)
-        lap_path    = os.path.join(save_path, "lap_df.csv")
-        driver_path = os.path.join(save_path, "driver_df.csv")
-        combined_lap_df.to_csv(lap_path,    index=False)
-        driver_df.to_csv(driver_path,       index=False)
-        print(f"\n💾 Saved lap_df    → {lap_path}")
-        print(f"💾 Saved driver_df → {driver_path}")
+        lap_path          = os.path.join(save_path, "lap_df.csv")
+        driver_path       = os.path.join(save_path, "driver_df.csv")
+        lap_training_path = os.path.join(save_path, "lap_training_df.csv")
+        combined_lap_df.to_csv(lap_path,          index=False)
+        driver_df.to_csv(driver_path,             index=False)
+        lap_training_df.to_csv(lap_training_path, index=False)
+        print(f"\n💾 Saved lap_df          → {lap_path}")
+        print(f"💾 Saved driver_df       → {driver_path}")
+        print(f"💾 Saved lap_training_df → {lap_training_path}")
 
-    return combined_lap_df, driver_df
+    return combined_lap_df, driver_df, lap_training_df
 
 
-def load_saved_dataset(save_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_lap_training_df(
+    lap_df: pd.DataFrame,
+    race_results: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    Load previously saved lap_df and driver_df from disk.
+    Build a lap-level training DataFrame where each qualifying lap
+    is tagged with its driver's race finishing position.
+
+    This gives ~478 training rows from 2 races instead of 42,
+    which is enough for LambdaRank to actually learn from.
+
+    The group structure for LambdaRank is session_label — all laps
+    within a session are competing against each other.
+
+    race_results must have session_label, driver, race_position columns.
+    """
+    if race_results.empty:
+        return pd.DataFrame()
+
+    # Merge race position onto every lap
+    training_df = lap_df.merge(
+        race_results[["session_label", "driver", "race_position", "race_podium"]],
+        on=["session_label", "driver"],
+        how="inner"
+    )
+
+    # Add qualifying position — rank each driver by their best lap time per session
+    # so the model knows where they qualified
+    best_times = (
+        training_df.groupby(["session_label", "driver"])["lap_time_s"]
+        .min()
+        .reset_index()
+        .rename(columns={"lap_time_s": "best_lap_time_s"})
+    )
+    best_times["quali_position"] = (
+        best_times.groupby("session_label")["best_lap_time_s"]
+        .rank(method="min")
+        .astype(int)
+    )
+    training_df = training_df.merge(
+        best_times[["session_label", "driver", "quali_position"]],
+        on=["session_label", "driver"],
+        how="left"
+    )
+
+    # Drop laps with no race position (weekend where race hasn't happened)
+    training_df = training_df.dropna(subset=["race_position"])
+    training_df["race_position"] = training_df["race_position"].astype(int)
+
+    print(f"   ✅ Lap training df: {len(training_df)} laps with race position targets "
+          f"across {training_df['session_label'].nunique()} session(s)")
+    return training_df
+
+
+def load_saved_dataset(save_path: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load previously saved lap_df, driver_df, and lap_training_df from disk.
     Useful for iterating on model.py without re-downloading telemetry.
     """
-    lap_path    = os.path.join(save_path, "lap_df.csv")
-    driver_path = os.path.join(save_path, "driver_df.csv")
+    lap_path          = os.path.join(save_path, "lap_df.csv")
+    driver_path       = os.path.join(save_path, "driver_df.csv")
+    lap_training_path = os.path.join(save_path, "lap_training_df.csv")
 
-    if not os.path.exists(lap_path) or not os.path.exists(driver_path):
+    if not all(os.path.exists(p) for p in
+               [lap_path, driver_path, lap_training_path]):
         raise FileNotFoundError(
             f"No saved dataset found at {save_path}. "
             "Run build_dataset() with save_path first."
         )
 
-    lap_df    = pd.read_csv(lap_path)
-    driver_df = pd.read_csv(driver_path)
+    lap_df          = pd.read_csv(lap_path)
+    driver_df       = pd.read_csv(driver_path)
+    lap_training_df = pd.read_csv(lap_training_path)
     print(f"✅ Loaded dataset from {save_path}")
-    print(f"   {len(lap_df)} laps, {len(driver_df)} driver-race rows")
-    return lap_df, driver_df
+    print(f"   {len(lap_df)} laps, {len(driver_df)} driver-race rows, "
+          f"{len(lap_training_df)} lap training rows")
+    return lap_df, driver_df, lap_training_df

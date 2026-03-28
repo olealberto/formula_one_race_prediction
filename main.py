@@ -30,13 +30,18 @@ from src.predict import predict_race, evaluate_prediction
 TRAINING_RACES = [
     {"year": 2026, "gp": "Australia", "session": "Q"},
     {"year": 2026, "gp": "China",     "session": "Q"},
-    # Add new races here after each weekend:
-    # {"year": 2026, "gp": "Japan",     "session": "Q"},
+    {"year": 2026, "gp": "Japan",     "session": "Q"},
 ]
 
 CACHE_DIR   = "./f1_cache"
 DATA_DIR    = "./data/processed"
 MODELS_DIR  = "./models"
+
+# Hardcoded validated features — bypasses dynamic selection.
+# These four were validated as stable across Australia Q and China Q
+# in both correlation and RF importance analysis.
+# Set to None to re-enable dynamic selection (recommended after 8+ races).
+FORCE_FEATURES = ["quali_position", "rpm_mean", "gear_mean", "throttle_pct_full", "brake_pct"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -48,9 +53,9 @@ def cmd_train(args):
     # Build or reload dataset
     if args.reload:
         print("\n📂 Loading saved dataset...")
-        lap_df, driver_df = load_saved_dataset(DATA_DIR)
+        lap_df, driver_df, lap_training_df = load_saved_dataset(DATA_DIR)
     else:
-        lap_df, driver_df = build_dataset(
+        lap_df, driver_df, lap_training_df = build_dataset(
             races     = TRAINING_RACES,
             cache_dir = CACHE_DIR,
             save_path = DATA_DIR,
@@ -62,10 +67,12 @@ def cmd_train(args):
 
     # Train
     ranking_model, podium_model, feature_cols, importance_df = train(
-        driver_df      = driver_df,
-        save_dir       = MODELS_DIR,
-        top_n_features = args.top_n,
-        run_evaluation = not args.skip_eval,
+        driver_df       = driver_df,
+        lap_training_df = lap_training_df,
+        save_dir        = MODELS_DIR,
+        top_n_features  = args.top_n,
+        run_evaluation  = not args.skip_eval,
+        force_features  = FORCE_FEATURES,
     )
 
     print("\n✅ Training complete.")
