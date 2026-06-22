@@ -1,0 +1,6 @@
+feature,importance
+quali_position,0.2
+rpm_mean,0.2
+gear_mean,0.2
+throttle_pct_full,0.2
+brake_pct,0.2
