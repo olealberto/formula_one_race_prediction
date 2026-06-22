@@ -25,17 +25,22 @@ warnings.filterwarnings("ignore")
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 TARGET_YEAR  = 2026
-TARGET_RACE  = "Japan"
+TARGET_RACE  = "Barcelona"
 
 # Races to use as form data — add new rounds as the season progresses
 FORM_RACES = [
     {"year": 2026, "gp": "Australia"},
     {"year": 2026, "gp": "China"},
+    {"year": 2026, "gp": "Japan"},
+    {"year": 2026, "gp": "Miami"},
+    {"year": 2026, "gp": "Canada"},
+    {"year": 2026, "gp": "Monaco"},
+    {"year": 2026, "gp": "Barcelona"}
 ]
 
 # How much to weight recent races vs older ones
 # First entry = oldest race weight, last = most recent
-RECENCY_WEIGHTS = [0.35, 0.65]
+RECENCY_WEIGHTS = [0.05, 0.05, 0.05, 0.05, 0.15, 0.30, 0.35]
 
 # How much the race over/underperformance adjusts the pace score
 # 0 = ignore race performance, 1 = equal weight with pace
@@ -192,7 +197,7 @@ def print_prediction(form: pd.DataFrame, year: int, gp: str):
 
     print(f"\n{'═'*62}")
     print(f"  PRE-RACE PREDICTION — {year} {gp} Grand Prix")
-    print(f"  Based on: Australia & China 2026 form")
+    print(f"  Based on: 2026 Jan-June form")
     print(f"  ⚠️  Rough predictor — no telemetry, no circuit data")
     print(f"{'═'*62}")
 
