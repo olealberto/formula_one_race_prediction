@@ -31,6 +31,10 @@ TRAINING_RACES = [
     {"year": 2026, "gp": "Australia", "session": "Q"},
     {"year": 2026, "gp": "China",     "session": "Q"},
     {"year": 2026, "gp": "Japan",     "session": "Q"},
+    {"year": 2026, "gp": "Miami",     "session": "Q"},
+    {"year": 2026, "gp": "Canada",     "session": "Q"},
+    {"year": 2026, "gp": "Monaco",     "session": "Q"},
+    {"year": 2026, "gp": "Barcelona",     "session": "Q"},
 ]
 
 CACHE_DIR   = "./f1_cache"
